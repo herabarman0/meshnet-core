@@ -1,7 +1,10 @@
 package com.herasoft.meshnet.core;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -17,11 +20,25 @@ import java.util.Random;
 public final class MeshNode implements Transport.Listener {
     /** fromPeer value for packets that arrived through the server. */
     public static final int SERVER_PEER = -1;
+    /** "from" value for packets this node originates (or re-routes itself). */
+    private static final int LOCAL = -2;
 
     public interface Listener {
         void onDelivered(MeshNode node, Packet packet, byte[] plain, int fromPeer);
         void onDuplicate(MeshNode node, Packet packet);
         void onDropped(MeshNode node, Packet packet, String reason);
+        /** A relay decided not to forward a flooded packet (counter-based suppression). */
+        default void onFloodSuppressed(MeshNode node, Packet packet) {}
+    }
+
+    /** A relayed packet waiting for its forward timer. */
+    private static final class Pending {
+        final Packet packet;
+        final List<Integer> heardFrom = new ArrayList<>(4);
+
+        Pending(Packet packet) {
+            this.packet = packet;
+        }
     }
 
     private final int id;
@@ -40,6 +57,7 @@ public final class MeshNode implements Transport.Listener {
     private Listener listener;
     private boolean gateway;
     private boolean retryScheduled;
+    private Map<Long, Pending> pending;
 
     public MeshNode(NodeInfo info, MeshConfig cfg, Transport transport, Clock clock,
                     ZoneRouter.ZoneMap zones, Crypto crypto, ServerBridge server, Random rng) {
@@ -69,7 +87,7 @@ public final class MeshNode implements Transport.Listener {
         byte[] body = crypto.encrypt(plain, id, dst, msgId);
         Packet p = new Packet(Packet.TYPE_DATA, cfg.defaultTtl, priority, msgId, id, dst, body);
         dedup.firstSeen(msgId, clock.nowMs()); // so echoes of my own packet are dropped
-        route(p, -2);
+        route(p, LOCAL);
         return msgId;
     }
 
@@ -83,6 +101,11 @@ public final class MeshNode implements Transport.Listener {
             return;
         }
         if (!dedup.firstSeen(p.msgId, clock.nowMs())) {
+            // A neighbour that sends me a packet obviously has it: remember that while my forward timer runs.
+            Pending waiting = pending == null ? null : pending.get(p.msgId);
+            if (waiting != null && fromPeer >= 0 && !waiting.heardFrom.contains(fromPeer)) {
+                waiting.heardFrom.add(fromPeer);
+            }
             if (listener != null) listener.onDuplicate(this, p);
             return;
         }
@@ -129,11 +152,48 @@ public final class MeshNode implements Transport.Listener {
         }
     }
 
+    /**
+     * Flood inside the zone. The originator sends at once. Relays wait a random time first and then
+     * skip neighbours that already sent them the packet (sender suppression), and, if enough
+     * neighbours did, skip forwarding altogether (counter-based suppression).
+     */
     private void floodZone(Packet p, int from) {
-        byte[] bytes = p.encode();
-        for (int peer : zonePeers) {
-            if (peer != from) transport.send(peer, bytes);
+        if (cfg.floodJitterMs <= 0 || from == LOCAL) {
+            byte[] bytes = p.encode();
+            for (int peer : zonePeers) {
+                if (peer != from) transport.send(peer, bytes);
+            }
+            return;
         }
+        final Pending pd = new Pending(p);
+        if (from >= 0) pd.heardFrom.add(from);
+        if (pending == null) pending = new HashMap<>();
+        pending.put(p.msgId, pd);
+        clock.schedule(rng.nextInt(cfg.floodJitterMs + 1), new Runnable() {
+            @Override
+            public void run() {
+                fireFlood(pd);
+            }
+        });
+    }
+
+    private void fireFlood(Pending pd) {
+        pending.remove(pd.packet.msgId);
+        if (!gateway && cfg.counterThreshold > 0 && pd.heardFrom.size() >= cfg.counterThreshold) {
+            if (listener != null) listener.onFloodSuppressed(this, pd.packet);
+            return;
+        }
+        List<Integer> targets = new ArrayList<>(zonePeers.size());
+        for (int peer : zonePeers) {
+            if (!pd.heardFrom.contains(peer)) targets.add(peer);
+        }
+        if (!gateway && cfg.floodFanout > 0 && targets.size() > cfg.floodFanout) {
+            Collections.shuffle(targets, rng);
+            targets = targets.subList(0, cfg.floodFanout);
+        }
+        if (targets.isEmpty()) return;
+        byte[] bytes = pd.packet.encode();
+        for (int peer : targets) transport.send(peer, bytes);
     }
 
     private void forwardBackbone(Packet p, int dstZone) {
@@ -168,7 +228,7 @@ public final class MeshNode implements Transport.Listener {
                         if (next >= 0) transport.send(next, item.packet.encode());
                         else storeForLater(item.packet, item.expiresAtMs);
                     } else {
-                        route(item.packet, -2); // role changed: normal routing decides
+                        route(item.packet, LOCAL); // role changed: normal routing decides
                     }
                 }
             }

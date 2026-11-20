@@ -50,6 +50,9 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         this.zoneCount = Math.max(1, n / cfg.zoneSize);
         this.rng = new Random(cfg.seed);
         this.meshCfg.zoneCount = zoneCount;
+        this.meshCfg.floodJitterMs = cfg.floodJitterMs;
+        this.meshCfg.counterThreshold = cfg.counterThreshold;
+        this.meshCfg.floodFanout = cfg.floodFanout;
         this.infos = new NodeInfo[n];
         this.nodes = new MeshNode[n];
         this.links = (HashSet<Integer>[]) new HashSet[n];
@@ -82,6 +85,11 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
             @Override
             public void onDropped(MeshNode node, Packet p, String reason) {
                 metrics.dropped++;
+            }
+
+            @Override
+            public void onFloodSuppressed(MeshNode node, Packet p) {
+                metrics.suppressed++;
             }
         };
         for (int i = 0; i < n; i++) {

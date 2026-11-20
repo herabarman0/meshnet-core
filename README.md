@@ -17,6 +17,25 @@ Pure-Java mesh engine + simulator. Phase 1 = `core` + `sim` + tests. Dashboard i
 
 Packet header is 22 bytes. AES-GCM nonce is derived from msgId+src, so encryption adds only the 16 byte tag.
 
+## Flood optimisation (inside a zone)
+Relays wait a random 0..`floodJitterMs` before forwarding. While waiting they note which neighbours already
+sent them the packet and skip those (sender suppression, loses nothing). If `counterThreshold` neighbours
+already sent it, the relay stays silent (counter suppression). Gateways never suppress. Optional `floodFanout`
+caps the number of neighbours a relay forwards to. `--classic true` in the simulator restores plain flooding.
+
+Measured (10,000 nodes, 3 seeds, 20% online, 1% churn, 5% gateway failure):
+
+| variant | delivery | tx/message | avg latency |
+|---|---|---|---|
+| classic flood | 99.95% | 52.5 | 214 ms |
+| sender suppression only | 99.95% | 48.0 | 247 ms |
+| + counter 3 (default) | 99.93% | 47.6 | 248 ms |
+| + counter 2 | 99.44% | 43.6 | 249 ms |
+| + counter 3, fanout 2 | 99.17% | 40.2 | 259 ms |
+
+Run your own comparison: `gradle :sim:run -PmainClass=...FloodBench` or `java -cp ... com.herasoft.meshnet.sim.FloodBench 10000 3`.
+Real gains beyond ~10% need routing knowledge inside the zone (reverse-path learning or multipoint relays), not smarter flooding.
+
 ## Run
     gradle test
     gradle :sim:run --args="--nodes 1000,10000,100000 --messages 2000 --csv results.csv"

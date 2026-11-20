@@ -14,6 +14,7 @@ public final class Metrics {
     public long receptions;
     public long duplicates;
     public long dropped;
+    public long suppressed;
     public long hopsSum;
     public long latencySum;
     public final List<Long> latencies = new ArrayList<>();
@@ -48,9 +49,9 @@ public final class Metrics {
     public String summary(SimConfig c) {
         return String.format(Locale.ROOT,
                 "nodes=%d zones~%d | sent=%d delivered=%d (%.1f%%) | hops avg=%.2f | latency avg=%.0fms p95=%dms%n"
-                        + "  transmissions/node=%.2f transmissions/message=%.1f | duplicate ratio=%.1f%% | via server=%.1f%% | dropped=%d",
+                        + "  transmissions/node=%.2f transmissions/message=%.1f | duplicate ratio=%.1f%% | via server=%.1f%% | dropped=%d | floods suppressed=%d",
                 c.nodes, Math.max(1, c.nodes / c.zoneSize), sent, delivered, deliveryRate() * 100, avgHops(),
                 avgLatencyMs(), p95LatencyMs(), (double) transmissions / c.nodes, transmissionsPerMessage(),
-                duplicateRatio() * 100, serverShare() * 100, dropped);
+                duplicateRatio() * 100, serverShare() * 100, dropped, suppressed);
     }
 }

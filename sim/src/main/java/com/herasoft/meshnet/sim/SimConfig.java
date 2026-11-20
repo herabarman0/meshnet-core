@@ -32,6 +32,11 @@ public final class SimConfig implements Cloneable {
 
     public boolean encrypt = false;
 
+    // flood optimisation, see MeshConfig
+    public int floodJitterMs = 40;
+    public int counterThreshold = 3;
+    public int floodFanout = 0;
+
     public SimConfig copy() {
         try {
             return (SimConfig) super.clone();
