@@ -1,6 +1,6 @@
 # MeshNet Core
 
-Pure-Java mesh engine + simulator. Phase 1 = `core` + `sim` + tests. Dashboard is phase 2.
+Pure-Java mesh engine + simulator. Phase 1 = `core` + `sim` + tests (package `com.herabarman.meshnet`). Dashboard is phase 2.
 
 ## Modules
 - `core`  – the engine (Java 11, no Android imports): Packet, DedupCache, MeshNode, GatewayManager,
@@ -20,21 +20,33 @@ Packet header is 22 bytes. AES-GCM nonce is derived from msgId+src, so encryptio
 ## Flood optimisation (inside a zone)
 Relays wait a random 0..`floodJitterMs` before forwarding. While waiting they note which neighbours already
 sent them the packet and skip those (sender suppression, loses nothing). If `counterThreshold` neighbours
-already sent it, the relay stays silent (counter suppression). Gateways never suppress. Optional `floodFanout`
-caps the number of neighbours a relay forwards to. `--classic true` in the simulator restores plain flooding.
+already sent it, the relay stays silent (counter suppression). Gateways never suppress.
 
-Measured (10,000 nodes, 3 seeds, 20% online, 1% churn, 5% gateway failure):
+## Route learning + ACK + fallback
+- The neighbour a packet first arrived from is the way back to its sender. Every node on a flood remembers
+  that (`RouteCache`, LRU, expiring), so one flood teaches the whole zone how to reach the sender.
+  Replies and follow-ups then go as unicast. Packets for another zone are unicast toward a gateway.
+- The destination answers with a 22 byte ACK. No ACK after `ackTimeoutMs` (doubling each retry):
+  the sender deletes its learned route and re-sends by flood (`attempt` 1, 2, ...). A retransmission
+  always floods and has its own dedup key, so a stale route can never block it. The destination
+  delivers each message once and re-ACKs repeats.
+- A learned next hop that is no longer a live neighbour is skipped immediately (no timeout needed).
+- Switches: `routeLearning`, `ackEnabled`, `maxRetries`, `ackTimeoutMs`; simulator `--classic true` = plain flooding.
 
-| variant | delivery | tx/message | avg latency |
-|---|---|---|---|
-| classic flood | 99.95% | 52.5 | 214 ms |
-| sender suppression only | 99.95% | 48.0 | 247 ms |
-| + counter 3 (default) | 99.93% | 47.6 | 248 ms |
-| + counter 2 | 99.44% | 43.6 | 249 ms |
-| + counter 3, fanout 2 | 99.17% | 40.2 | 259 ms |
+Measured (10,000 nodes, 3 seeds, 20% online, 1% churn, 5% gateway failure). tx/msg includes ACK traffic:
 
-Run your own comparison: `gradle :sim:run -PmainClass=...FloodBench` or `java -cp ... com.herasoft.meshnet.sim.FloodBench 10000 3`.
-Real gains beyond ~10% need routing knowledge inside the zone (reverse-path learning or multipoint relays), not smarter flooding.
+| traffic | variant | delivery | tx/message | avg latency |
+|---|---|---|---|---|
+| 6-message conversations | classic flood | 99.93% | 52.4 | 216 ms |
+| | suppression only | 99.93% | 47.5 | 250 ms |
+| | **routes + ACK (default)** | **99.98%** | **22.1** | 241 ms |
+| | routes, no ACK | 99.82% | 14.1 | 238 ms |
+| one-shot (every message a new pair) | classic flood | 100.00% | 53.6 | 217 ms |
+| | **routes + ACK (default)** | 99.95% | 43.8 | 254 ms |
+
+Without ACK the routes are cheaper but fragile (delivery drops); ACK + fallback costs about 8 tx/message and fixes it.
+ACK on top of plain flooding is a bad deal (96.9 tx/message): the ACK itself gets flooded back.
+Reproduce: `java -cp ... com.herabarman.meshnet.sim.FloodBench 10000 3`.
 
 ## Run
     gradle test

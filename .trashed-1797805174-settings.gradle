@@ -1,0 +1,3 @@
+rootProject.name = 'meshnet-core'
+include 'core', 'sim', 'android-adapter'
+// 'dashboard' module comes in phase 2
