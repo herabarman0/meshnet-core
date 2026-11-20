@@ -30,7 +30,7 @@ public final class MeshNode implements Transport.Listener {
     private static final int LOCAL = -2;
     /** Route cache key meaning "the way toward a gateway of my zone". */
     private static final int GATEWAY_KEY = -3;
-    private static final long ACK_MASK = 0x5851F42D4C957F2DL;
+    public static final long ACK_MASK = 0x5851F42D4C957F2DL;
     private static final long ATTEMPT_MIX = 0x9E3779B97F4A7C15L;
 
     public interface Listener {

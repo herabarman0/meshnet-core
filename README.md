@@ -1,11 +1,12 @@
 # MeshNet Core
 
-Pure-Java mesh engine + simulator. Phase 1 = `core` + `sim` + tests (package `com.herabarman.meshnet`). Dashboard is phase 2.
+Pure-Java mesh engine + simulator. Package `com.herabarman.meshnet`.
 
 ## Modules
 - `core`  – the engine (Java 11, no Android imports): Packet, DedupCache, MeshNode, GatewayManager,
             ZoneRouter, StoreAndForward, Crypto (AES-GCM, X25519), Transport / ServerBridge / Clock interfaces
 - `sim`   – virtual-clock simulator, 1k to 100k+ nodes, churn, gateway failure, metrics, CSV export
+- `dashboard` – live browser dashboard on top of the simulator (built-in JDK HTTP server + one HTML page, no dependencies)
 - `android-adapter` – stub showing what BluetoothTransport has to implement
 
 ## Topology
@@ -47,6 +48,20 @@ Measured (10,000 nodes, 3 seeds, 20% online, 1% churn, 5% gateway failure). tx/m
 Without ACK the routes are cheaper but fragile (delivery drops); ACK + fallback costs about 8 tx/message and fixes it.
 ACK on top of plain flooding is a bad deal (96.9 tx/message): the ACK itself gets flooded back.
 Reproduce: `java -cp ... com.herabarman.meshnet.sim.FloodBench 10000 3`.
+
+## Dashboard
+    gradle :dashboard:run                      # then open http://127.0.0.1:8080 in the phone/PC browser
+    java -cp core/build/classes/java/main:sim/build/classes/java/main:dashboard/build/classes/java/main:dashboard/build/resources/main \
+         com.herabarman.meshnet.dashboard.DashboardMain --port 8080
+
+Shows zones (dashed circles), nodes (green = online, grey = offline, red ring = down), gateways (white ring),
+backbone links (amber), and the learned route between the selected nodes A and B (blue).
+Tap a node for A, another for B. Buttons: local / remote / A to B message (packets fly as dots, ACKs in blue,
+server path in purple), kill A, revive A, kill the gateways of A's zone, pause. Settings: nodes, zone size,
+online %, gateways, flood suppression / route learning / ACK on or off (these rebuild the network), and live
+sliders for packet loss, churn, background traffic, speed (0.1x to 20x).
+It binds to 127.0.0.1 only (`--host 0.0.0.0` to open it to your network, but the page can kill nodes).
+Keep nodes under about 600 so the picture stays readable.
 
 ## Run
     gradle test

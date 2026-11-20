@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MeshNet ড্যাশবোর্ড</title>
+<style>
+  :root {
+    --bg: #0b0f17; --panel: #121927; --line: #26304a; --text: #e6e9ef; --dim: #8b93a5;
+    --accent: #00E5A0; --warn: #ffb84d; --bad: #ff5c5c; --blue: #4da3ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Noto Sans Bengali", "Segoe UI", sans-serif; }
+  body { padding: env(safe-area-inset-top, 0px) 10px calc(env(safe-area-inset-bottom, 0px) + 24px); max-width: 780px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 0 6px; }
+  header b { font-size: 18px; color: var(--accent); letter-spacing: .3px; }
+  header .grow { flex: 1; }
+  #clock { color: var(--dim); font-variant-numeric: tabular-nums; }
+  canvas { display: block; width: 100%; background: radial-gradient(circle at 50% 50%, #101828, #0b0f17 70%);
+    border: 1px solid var(--line); border-radius: 14px; touch-action: manipulation; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--dim); font-size: 12.5px; padding: 8px 2px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .legend i.line { width: 16px; height: 3px; border-radius: 2px; vertical-align: 2px; }
+  section, details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  button, select { font: inherit; color: var(--text); background: #182136; border: 1px solid #2f3c5f; border-radius: 10px;
+    padding: 10px 12px; min-height: 44px; }
+  button.go { background: var(--accent); color: #04110c; border-color: var(--accent); font-weight: 700; }
+  button.danger { border-color: #5a2a33; color: #ffb3b3; }
+  button:disabled { opacity: .4; }
+  .hint { color: var(--dim); font-size: 13px; }
+  #sel div { margin: 2px 0; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .cell { background: #0e1522; border: 1px solid var(--line); border-radius: 10px; padding: 8px 6px; text-align: center; }
+  .cell b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .cell span { color: var(--dim); font-size: 11.5px; }
+  pre#log { margin: 0; max-height: 190px; overflow: auto; white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, Menlo, monospace; color: #c7ccd8; }
+  label.s { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin: 10px 0; }
+  label.s input[type=range] { grid-column: 1 / 3; width: 100%; accent-color: var(--accent); }
+  label.c { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+  label.c input { width: 20px; height: 20px; accent-color: var(--accent); }
+  @media (max-width: 520px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <b>MeshNet</b><span class="hint">লাইভ ড্যাশবোর্ড</span><span class="grow"></span>
+  <span id="clock">0.0s</span>
+  <button id="pause" title="থামান / চালান">⏸</button>
+</header>
+
+<canvas id="c"></canvas>
+<div class="legend">
+  <span><i style="background:#00E5A0"></i>অনলাইন</span>
+  <span><i style="background:#8b93a5"></i>অফলাইন</span>
+  <span><i style="background:transparent;border:2px solid #ff5c5c"></i>বন্ধ</span>
+  <span><i style="background:#00E5A0;box-shadow:0 0 0 2px #fff"></i>গেটওয়ে</span>
+  <span><i class="line" style="background:#ffb84d"></i>ব্যাকবোন</span>
+  <span><i class="line" style="background:#4da3ff"></i>শেখা পথ</span>
+  <span><i style="background:#fff"></i>ডেটা</span>
+  <span><i style="background:#4da3ff"></i>ACK</span>
+</div>
+
+<section id="sel">
+  <div id="selInfo" class="hint">একটা নোডে ট্যাপ করুন (A), তারপর আরেকটায় (B)।</div>
+  <div id="routeInfo" class="hint"></div>
+</section>
+
+<section>
+  <div class="row">
+    <button id="sendLocal" class="go">লোকাল মেসেজ</button>
+    <button id="sendRemote" class="go">রিমোট মেসেজ</button>
+    <button id="sendAB" disabled>A → B পাঠান</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="killA" class="danger" disabled>A বন্ধ করুন</button>
+    <button id="reviveA" disabled>A চালু করুন</button>
+    <button id="killGW" class="danger" disabled>A-এর জোনের গেটওয়ে বন্ধ</button>
+  </div>
+  <div class="hint" style="margin-top:8px">প্রথম মেসেজ ফ্লাড হয়। একই জোড়ায় দ্বিতীয় মেসেজ পাঠিয়ে দেখুন: শেখা পথে সরাসরি যাবে।</div>
+</section>
+
+<section>
+  <div class="grid">
+    <div class="cell"><b id="mDel">–</b><span>ডেলিভারি</span></div>
+    <div class="cell"><b id="mHops">–</b><span>গড় হপ</span></div>
+    <div class="cell"><b id="mLat">–</b><span>গড় ল্যাটেন্সি</span></div>
+    <div class="cell"><b id="mTx">–</b><span>ট্রান্সমিশন/মেসেজ</span></div>
+    <div class="cell"><b id="mDup">–</b><span>ডুপ্লিকেট</span></div>
+    <div class="cell"><b id="mAck">–</b><span>ACK</span></div>
+    <div class="cell"><b id="mRetry">–</b><span>রিট্রাই</span></div>
+    <div class="cell"><b id="mSup">–</b><span>ফ্লাড কমানো</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="hint" style="margin-bottom:6px">আপনার মেসেজের লগ (নতুন উপরে)</div>
+  <pre id="log">এখনো কিছু নেই</pre>
+</section>
+
+<details>
+  <summary>সেটিংস</summary>
+  <label class="s"><span>নোড সংখ্যা</span><b id="vNodes">120</b><input id="nodes" type="range" min="30" max="600" step="10" value="120"></label>
+  <label class="s"><span>জোনের আকার</span><b id="vZone">12</b><input id="zoneSize" type="range" min="6" max="24" step="1" value="12"></label>
+  <label class="s"><span>অনলাইন %</span><b id="vOnline">20</b><input id="online" type="range" min="0" max="100" step="5" value="20"></label>
+  <label class="s"><span>গেটওয়ে প্রতি জোনে</span><b id="vGw">2</b><input id="gateways" type="range" min="1" max="3" step="1" value="2"></label>
+  <label class="c"><input id="suppress" type="checkbox" checked>ফ্লাড কমানো (sender/counter suppression)</label>
+  <label class="c"><input id="routes" type="checkbox" checked>রুট লার্নিং</label>
+  <label class="c"><input id="ack" type="checkbox" checked>ACK + ফলব্যাক</label>
+  <div class="row"><button id="apply" class="go">প্রয়োগ করে নতুন করে শুরু</button></div>
+  <div class="hint" style="margin-top:6px">উপরের সেটিংগুলো প্রয়োগ করলে নেটওয়ার্ক নতুন করে তৈরি হয়। নিচেরগুলো সাথে সাথে কাজ করে।</div>
+
+  <label class="s"><span>প্যাকেট লস %</span><b id="vLoss">0</b><input id="loss" type="range" min="0" max="60" step="5" value="0"></label>
+  <label class="s"><span>নোড বন্ধ হওয়ার হার % (প্রতি ৫ সেকেন্ডে)</span><b id="vChurn">0</b><input id="churn" type="range" min="0" max="20" step="1" value="0"></label>
+  <label class="s"><span>অটো ট্রাফিক (কথোপকথন/মিনিট)</span><b id="vTraffic">0</b><input id="traffic" type="range" min="0" max="120" step="5" value="0"></label>
+  <label class="c"><input id="showAll" type="checkbox">সব প্যাকেট দেখান (শুধু আমার মেসেজ নয়)</label>
+  <div class="row">
+    <span class="hint" style="align-self:center">গতি</span>
+    <select id="speed">
+      <option value="0.1">0.1x</option><option value="0.25">0.25x</option><option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option><option value="4">4x</option><option value="20">20x</option>
+    </select>
+  </div>
+</details>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const canvas = $("c");
+const ctx = canvas.getContext("2d");
+
+let S = null;               // latest server state
+let pos = [];               // node positions
+let zones = [];             // zone circles
+let server = { x: 0, y: 0 };
+let selA = -1, selB = -1;
+let lastSeq = 0, lastSimT = 0;
+let anims = [];
+let W = 300, H = 300, dpr = 1;
+let layoutKey = "";
+let settingsLoaded = false;
+
+// ---- layout ----------------------------------------------------------------------------------
+function resize() {
+  const w = Math.min(document.documentElement.clientWidth - 20, 760) || 360;
+  dpr = window.devicePixelRatio || 1;
+  W = w; H = Math.round(w * 1.05);
+  canvas.style.height = H + "px";
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  layoutKey = "";
+  layout();
+}
+
+function layout() {
+  if (!S) return;
+  const key = [S.n, S.zoneSize, S.zoneCount, W, H].join("/");
+  if (key === layoutKey) return;
+  layoutKey = key;
+  const cx = W / 2, cy = H / 2;
+  server = { x: cx, y: cy };
+  const size = Math.min(W, H);
+  const R = 0.37 * size;
+  const Z = Math.max(1, S.zoneCount);
+  const rz = Math.min(0.9 * Math.PI * R / Z, 0.2 * size);
+  pos = new Array(S.n);
+  zones = [];
+  for (let z = 0; z < Z; z++) {
+    const ang = (2 * Math.PI * z) / Z - Math.PI / 2;
+    const zx = cx + R * Math.cos(ang), zy = cy + R * Math.sin(ang);
+    zones.push({ x: zx, y: zy, r: rz });
+    const start = z * S.zoneSize;
+    const end = z === Z - 1 ? S.n : start + S.zoneSize;
+    const cnt = end - start;
+    for (let i = 0; i < cnt; i++) {
+      const a = (2 * Math.PI * i) / cnt;
+      const rr = cnt > 14 ? rz * (i % 2 ? 0.88 : 0.56) : rz * 0.78;
+      pos[start + i] = { x: zx + rr * Math.cos(a), y: zy + rr * Math.sin(a) };
+    }
+  }
+}
+
+// ---- drawing ---------------------------------------------------------------------------------
+function lines(flat, color, width) {
+  if (!flat || !flat.length) return;
+  ctx.beginPath();
+  for (let i = 0; i + 1 < flat.length; i += 2) {
+    const a = pos[flat[i]], b = pos[flat[i + 1]];
+    if (!a || !b) continue;
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+  }
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+}
+
+function draw(now) {
+  requestAnimationFrame(draw);
+  if (!S || !pos.length) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = "#2b3550"; ctx.lineWidth = 1;
+  for (const z of zones) { ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, 6.2832); ctx.stroke(); }
+  ctx.setLineDash([]);
+
+  // online nodes connect to the server
+  ctx.beginPath();
+  for (let i = 0; i < S.n; i++) {
+    const f = S.st.charCodeAt(i) - 48;
+    if ((f & 1) && (f & 2)) { ctx.moveTo(server.x, server.y); ctx.lineTo(pos[i].x, pos[i].y); }
+  }
+  ctx.strokeStyle = "rgba(0,229,160,0.11)"; ctx.lineWidth = 1; ctx.stroke();
+
+  lines(S.intra, "rgba(139,147,165,0.28)", 1);
+  lines(S.bb, "rgba(255,184,77,0.55)", 1.2);
+
+  if (S.route && S.route.length > 1) {
+    ctx.beginPath();
+    S.route.forEach((id, k) => { const p = pos[id]; if (!p) return; if (k === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.strokeStyle = "#4da3ff"; ctx.lineWidth = 3; ctx.stroke();
+  }
+
+  for (let i = 0; i < S.n; i++) {
+    const f = S.st.charCodeAt(i) - 48, p = pos[i];
+    const alive = f & 1, online = f & 2, gw = f & 4;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, gw ? 4.6 : 2.6, 0, 6.2832);
+    if (!alive) { ctx.strokeStyle = "#ff5c5c"; ctx.lineWidth = 1.3; ctx.stroke(); continue; }
+    ctx.fillStyle = online ? "#00E5A0" : "#8b93a5"; ctx.fill();
+    if (gw) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.stroke(); }
+  }
+
+  for (const [id, color] of [[selA, "#ffffff"], [selB, "#ffd166"]]) {
+    if (id >= 0 && pos[id]) {
+      ctx.beginPath(); ctx.arc(pos[id].x, pos[id].y, 8, 0, 6.2832);
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = color; ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.fillText(id === selA ? "A" : "B", pos[id].x + 9, pos[id].y - 8);
+    }
+  }
+
+  anims = anims.filter((a) => now - a.start < a.dur);
+  for (const a of anims) {
+    const t = (now - a.start) / a.dur;
+    if (t < 0) continue;
+    const x = a.fx + (a.tx - a.fx) * t, y = a.fy + (a.ty - a.fy) * t;
+    ctx.beginPath(); ctx.arc(x, y, a.r, 0, 6.2832);
+    ctx.fillStyle = a.color; ctx.shadowColor = a.color; ctx.shadowBlur = 8; ctx.fill(); ctx.shadowBlur = 0;
+  }
+
+  ctx.beginPath(); ctx.arc(server.x, server.y, 15, 0, 6.2832);
+  ctx.fillStyle = "#6c5ce7"; ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = "10px system-ui, sans-serif"; ctx.textAlign = "center";
+  ctx.fillText("সার্ভার", server.x, server.y + 3.5); ctx.textAlign = "start";
+}
+
+// ---- server communication --------------------------------------------------------------------
+async function api(path) {
+  const r = await fetch(path);
+  return r.json();
+}
+
+function queueEvents(now) {
+  if (!S.events || !S.events.length) return;
+  const speed = S.speed || 1;
+  for (const e of S.events) {
+    const t = e[1], from = pos[e[2]], to = pos[e[3]], kind = e[4], srv = e[5];
+    if (!from || !to) continue;
+    const delay = Math.max(0, Math.min(900, (t - lastSimT) / speed));
+    const color = kind ? "#4da3ff" : "#ffffff";
+    if (srv) {
+      anims.push({ fx: from.x, fy: from.y, tx: server.x, ty: server.y, start: now + delay, dur: 260, color: "#a29bfe", r: 3 });
+      anims.push({ fx: server.x, fy: server.y, tx: to.x, ty: to.y, start: now + delay + 260, dur: 260, color: "#a29bfe", r: 3 });
+    } else {
+      anims.push({ fx: from.x, fy: from.y, tx: to.x, ty: to.y, start: now + delay, dur: 320, color, r: kind ? 2.8 : 3.4 });
+    }
+  }
+  if (anims.length > 2500) anims = anims.slice(anims.length - 2500);
+}
+
+function fmtPct(x) { return (x * 100).toFixed(1) + "%"; }
+
+function render() {
+  const m = S.m;
+  $("clock").textContent = (S.t / 1000).toFixed(1) + "s";
+  $("pause").textContent = S.paused ? "▶" : "⏸";
+  $("mDel").textContent = m.sent ? fmtPct(m.deliveryRate) : "–";
+  $("mHops").textContent = m.delivered ? m.avgHops.toFixed(1) : "–";
+  $("mLat").textContent = m.delivered ? m.avgLatency + "ms" : "–";
+  $("mTx").textContent = m.sent ? m.txPerMsg.toFixed(1) : "–";
+  $("mDup").textContent = m.sent ? fmtPct(m.dupRatio) : "–";
+  $("mAck").textContent = m.acked + "/" + m.sent;
+  $("mRetry").textContent = m.retries;
+  $("mSup").textContent = m.suppressed;
+  $("log").textContent = S.log.length ? S.log.slice().reverse().join("\n") : "এখনো কিছু নেই";
+
+  if (selA >= 0 && S.selA) {
+    const a = S.selA;
+    $("selInfo").textContent = "A = নোড " + a.id + " · জোন " + a.zone + " · " + (a.alive ? (a.online ? "অনলাইন" : "অফলাইন") : "বন্ধ")
+      + (a.gateway ? " · গেটওয়ে" : "") + " · ব্যাটারি " + Math.round(a.battery * 100) + "% · সিগন্যাল " + Math.round(a.signal * 100) + "%"
+      + (selB >= 0 ? "   |   B = নোড " + selB + " · জোন " + Math.floor(Math.min(selB / S.zoneSize, S.zoneCount - 1)) : "");
+  } else {
+    $("selInfo").textContent = "একটা নোডে ট্যাপ করুন (A), তারপর আরেকটায় (B)।";
+  }
+  if (selA >= 0 && selB >= 0) {
+    const r = S.route || [];
+    if (r.length > 1 && r[r.length - 1] === selB) $("routeInfo").textContent = "শেখা পথ: " + r.join(" → ") + " (সরাসরি পথে যাবে, ফ্লাড লাগবে না)";
+    else if (r.length > 1) $("routeInfo").textContent = "আংশিক পথ জানা: " + r.join(" → ") + " … বাকিটা ফ্লাড হবে";
+    else $("routeInfo").textContent = "এই জোড়ার পথ এখনো শেখা হয়নি, প্রথম মেসেজ ফ্লাড হবে।";
+  } else {
+    $("routeInfo").textContent = "";
+  }
+  $("sendAB").disabled = !(selA >= 0 && selB >= 0);
+  for (const id of ["killA", "reviveA", "killGW"]) $(id).disabled = selA < 0;
+}
+
+function loadSettings() {
+  const s = S.settings;
+  const set = (id, v, label) => { $(id).value = v; if (label) $(label).textContent = v; };
+  set("nodes", S.n, "vNodes"); set("zoneSize", S.zoneSize, "vZone");
+  set("online", s.online, "vOnline"); set("gateways", s.gateways, "vGw");
+  set("loss", s.loss, "vLoss"); set("churn", s.churn, "vChurn"); set("traffic", s.traffic, "vTraffic");
+  $("suppress").checked = s.suppress; $("routes").checked = s.routes; $("ack").checked = s.ack;
+  $("showAll").checked = S.showAll; $("speed").value = String(S.speed);
+  settingsLoaded = true;
+}
+
+let polling = false;
+async function poll() {
+  if (polling) return;
+  polling = true;
+  try {
+    const next = await api("/api/state?since=" + lastSeq + "&a=" + selA + "&b=" + selB);
+    const reset = S && (next.t < S.t);   // network was rebuilt
+    S = next;
+    layout();
+    if (reset) { anims = []; lastSimT = S.t; selA = -1; selB = -1; }
+    const now = performance.now();
+    queueEvents(now);
+    lastSeq = S.seq; lastSimT = S.t;
+    if (!settingsLoaded) loadSettings();
+    render();
+  } catch (e) {
+    console.error(e);
+  } finally {
+    polling = false;
+  }
+}
+
+async function act(path) { try { await api(path); } catch (e) { console.error(e); } poll(); }
+
+// ---- interaction -----------------------------------------------------------------------------
+canvas.addEventListener("pointerup", (ev) => {
+  if (!S || !pos.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) * (W / rect.width), y = (ev.clientY - rect.top) * (H / rect.height);
+  let best = -1, bestD = 18 * 18;
+  for (let i = 0; i < pos.length; i++) {
+    const dx = pos[i].x - x, dy = pos[i].y - y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  if (best < 0) { selA = -1; selB = -1; }
+  else if (selA < 0 || (selA >= 0 && selB >= 0)) { selA = best; selB = -1; }
+  else if (best !== selA) selB = best;
+  poll();
+});
+
+async function sendRandom(mode) {
+  try {
+    const r = await api("/api/send?mode=" + mode);
+    if (r.ok) { selA = r.src; selB = r.dst; }
+  } catch (e) { console.error(e); }
+  poll();
+}
+
+$("sendLocal").addEventListener("click", () => sendRandom("local"));
+$("sendRemote").addEventListener("click", () => sendRandom("remote"));
+$("sendAB").addEventListener("click", () => act("/api/send?src=" + selA + "&dst=" + selB));
+$("killA").addEventListener("click", () => act("/api/kill?id=" + selA));
+$("reviveA").addEventListener("click", () => act("/api/revive?id=" + selA));
+$("killGW").addEventListener("click", () => {
+  if (S && selA >= 0) act("/api/killgw?zone=" + Math.floor(Math.min(selA / S.zoneSize, S.zoneCount - 1)));
+});
+$("pause").addEventListener("click", () => act("/api/config?paused=" + (S && S.paused ? 0 : 1)));
+
+for (const [id, label] of [["nodes", "vNodes"], ["zoneSize", "vZone"], ["online", "vOnline"], ["gateways", "vGw"],
+                           ["loss", "vLoss"], ["churn", "vChurn"], ["traffic", "vTraffic"]]) {
+  $(id).addEventListener("input", () => { $(label).textContent = $(id).value; });
+}
+for (const id of ["loss", "churn", "traffic"]) {
+  $(id).addEventListener("change", () => act("/api/config?" + id + "=" + $(id).value));
+}
+$("showAll").addEventListener("change", () => act("/api/config?showAll=" + ($("showAll").checked ? 1 : 0)));
+$("speed").addEventListener("change", () => act("/api/config?speed=" + $("speed").value));
+$("apply").addEventListener("click", async () => {
+  const q = ["nodes", "zoneSize", "online", "gateways"].map((id) => id + "=" + $(id).value);
+  for (const id of ["suppress", "routes", "ack"]) q.push(id + "=" + ($(id).checked ? 1 : 0));
+  q.push("reset=1");
+  selA = -1; selB = -1; lastSeq = 0; anims = [];
+  await act("/api/config?" + q.join("&"));
+});
+
+window.addEventListener("resize", resize);
+resize();
+requestAnimationFrame(draw);
+setInterval(poll, 250);
+poll();
+</script>
+</body>
+</html>

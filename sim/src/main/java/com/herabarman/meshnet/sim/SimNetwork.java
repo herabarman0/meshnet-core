@@ -26,6 +26,16 @@ import java.util.Set;
  * global state instead of a real gossip/DHT. Everything else runs through the real core engine.
  */
 public final class SimNetwork implements ZoneRouter.ZoneMap {
+    /** Observer for visualisation. All methods run on the simulation thread. */
+    public interface Tracer {
+        /** A packet is on the wire (viaServer: it goes node -> server -> node). */
+        void onTransmit(long timeMs, int from, int to, byte[] data, boolean viaServer);
+        default void onSent(long msgId, int src, int dst) {}
+        default void onDelivered(long msgId, int dst, long latencyMs, int hops, boolean viaServer) {}
+        default void onAcked(long msgId) {}
+        default void onRetry(long msgId) {}
+    }
+
     public final SimConfig cfg;
     public final SimClock clock = new SimClock();
     public final Metrics metrics = new Metrics();
@@ -41,6 +51,7 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
     private final List<List<Integer>> gateways = new ArrayList<>();
     private final boolean[] electionPending;
     private final Map<Long, Long> sentAt = new HashMap<>();
+    private Tracer tracer;
 
     @SuppressWarnings("unchecked")
     public SimNetwork(SimConfig cfg) {
@@ -79,6 +90,8 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
                 metrics.latencySum += lat;
                 metrics.latencies.add(lat);
                 if (fromPeer == MeshNode.SERVER_PEER) metrics.viaServer++;
+                if (tracer != null) tracer.onDelivered(p.msgId, node.id(), lat,
+                        meshCfg.defaultTtl - p.ttl + 1, fromPeer == MeshNode.SERVER_PEER);
             }
 
             @Override
@@ -95,11 +108,13 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
             @Override
             public void onAcked(MeshNode node, long msgId) {
                 metrics.acked++;
+                if (tracer != null) tracer.onAcked(msgId);
             }
 
             @Override
             public void onRetry(MeshNode node, Packet p) {
                 metrics.retries++;
+                if (tracer != null) tracer.onRetry(p.msgId);
             }
 
             @Override
@@ -120,7 +135,7 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
             ServerBridge bridge = new ServerBridge() {
                 @Override public boolean available() { return infos[id].alive && infos[id].online; }
                 @Override public boolean isReachable(int nodeId) { return infos[nodeId].alive && infos[nodeId].online; }
-                @Override public void send(int dstNode, byte[] data) { serverSend(dstNode, data); }
+                @Override public void send(int dstNode, byte[] data) { serverSend(id, dstNode, data); }
             };
             nodes[i] = new MeshNode(infos[i], meshCfg, t, clock, this, crypto, bridge, rng);
             nodes[i].setListener(hooks);
@@ -265,6 +280,7 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         metrics.transmissions++;
         if (!infos[from].alive || !infos[to].alive || !links[from].contains(to)) return;
         if (cfg.lossRate > 0 && rng.nextDouble() < cfg.lossRate) return;
+        if (tracer != null) tracer.onTransmit(clock.nowMs(), from, to, data, false);
         long delay = (zoneOf(from) == zoneOf(to) ? cfg.intraMs : cfg.backboneMs) + rng.nextInt(cfg.jitterMs + 1);
         clock.schedule(delay, new Runnable() {
             @Override
@@ -277,8 +293,9 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         });
     }
 
-    private void serverSend(final int dst, final byte[] data) {
+    private void serverSend(int from, final int dst, final byte[] data) {
         metrics.transmissions++;
+        if (tracer != null) tracer.onTransmit(clock.nowMs(), from, dst, data, true);
         clock.schedule(cfg.serverMs, new Runnable() {
             @Override
             public void run() {
@@ -295,7 +312,19 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         long id = nodes[src].send(dst, payload, priority);
         sentAt.put(id, clock.nowMs());
         metrics.sent++;
+        if (tracer != null) tracer.onSent(id, src, dst);
         return id;
+    }
+
+    public void setTracer(Tracer tracer) { this.tracer = tracer; }
+
+    /** Every link once, as {a, b} with a < b. */
+    public List<int[]> edges() {
+        List<int[]> out = new ArrayList<>();
+        for (int a = 0; a < n; a++) {
+            for (int b : links[a]) if (a < b) out.add(new int[]{a, b});
+        }
+        return out;
     }
 
     public List<Integer> allGateways() {
