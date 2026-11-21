@@ -14,6 +14,8 @@ class RoutingTest {
         c.onlineRatio = online;
         c.jitterMs = 0;
         c.seed = 7;
+        c.backbone = "chord";    // these tests are about the ring backbone + gateways
+        c.serverFirst = true;    // and about the old server-first behaviour
         return c;
     }
 

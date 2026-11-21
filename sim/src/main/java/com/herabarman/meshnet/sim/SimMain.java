@@ -11,6 +11,7 @@ import java.util.List;
  *   [--online 0.2] [--churn 0.01] [--gwFail 0.05] [--messages 1000] [--local 0.3]
  *   [--loss 0.0] [--seed 1] [--encrypt true] [--csv results.csv]
  *   [--floodJitter 40] [--counter 3] [--fanout 0] [--classic true]  (flood optimisation; classic = old flooding)
+ *   [--backbone auto|full|chord] [--links 2] [--serverFirst false]  (zone-to-zone mesh; server only helps by default)
  *   [--routes true] [--ack true] [--retries 2] [--ackTimeout 3000] [--conv 6]  (route learning, ACK, messages per conversation)
  * A comma list for --nodes runs one simulation per size.
  */
@@ -41,6 +42,9 @@ public final class SimMain {
                 case "--ack": base.ackEnabled = Boolean.parseBoolean(v); break;
                 case "--retries": base.maxRetries = Integer.parseInt(v); break;
                 case "--ackTimeout": base.ackTimeoutMs = Long.parseLong(v); break;
+                case "--backbone": base.backbone = v; break;
+                case "--links": base.linksPerPair = Integer.parseInt(v); break;
+                case "--serverFirst": base.serverFirst = Boolean.parseBoolean(v); break;
                 case "--conv": base.conversationLength = Integer.parseInt(v); break;
                 case "--classic":
                     if (Boolean.parseBoolean(v)) {

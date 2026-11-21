@@ -28,8 +28,8 @@ public final class MeshNode implements Transport.Listener {
     public static final int SERVER_PEER = -1;
     /** "from" value for packets this node originates (or re-routes itself). */
     private static final int LOCAL = -2;
-    /** Route cache key meaning "the way toward a gateway of my zone". */
-    private static final int GATEWAY_KEY = -3;
+    /** Route cache keys for "the way toward zone z" are ZONE_KEY_BASE - z (always negative). */
+    private static final int ZONE_KEY_BASE = -10;
     public static final long ACK_MASK = 0x5851F42D4C957F2DL;
     private static final long ATTEMPT_MIX = 0x9E3779B97F4A7C15L;
 
@@ -108,13 +108,14 @@ public final class MeshNode implements Transport.Listener {
     public void setListener(Listener listener) { this.listener = listener; }
     public int storedCount() { return store.size(); }
 
-    /** Learned next hop toward dst (or toward a gateway if dst is in another zone), -1 if none. For diagnostics. */
+    /** Learned next hop toward dst (or toward dst's zone if it is another zone), -1 if none. For diagnostics. */
     public int routeTo(int dst) {
         return routes == null ? -1 : routes.get(routeKeyFor(dst), clock.nowMs());
     }
 
     private int routeKeyFor(int dst) {
-        return zones.zoneOf(dst) == info.zone ? dst : GATEWAY_KEY;
+        int z = zones.zoneOf(dst);
+        return z == info.zone ? dst : ZONE_KEY_BASE - z;
     }
 
     private static long dedupKey(Packet p) {
@@ -229,7 +230,8 @@ public final class MeshNode implements Transport.Listener {
         if (!cfg.routeLearning || from < 0 || p.src == id) return;
         if (!zonePeers.contains(from)) return;
         if (routes == null) routes = new RouteCache(cfg.routeCacheMax, cfg.routeTtlMs);
-        routes.put(zones.zoneOf(p.src) == info.zone ? p.src : GATEWAY_KEY, from, clock.nowMs());
+        int srcZone = zones.zoneOf(p.src);
+        routes.put(srcZone == info.zone ? p.src : ZONE_KEY_BASE - srcZone, from, clock.nowMs());
     }
 
     @Override
@@ -247,18 +249,46 @@ public final class MeshNode implements Transport.Listener {
     // ---- routing ----------------------------------------------------------------------------
 
     private void route(Packet p, int from) {
-        if ((p.src == id || gateway) && server != null && server.available() && server.isReachable(p.dst)) {
+        boolean serverOk = server != null && server.available() && server.isReachable(p.dst);
+        boolean border = !backbonePeers.isEmpty();
+        boolean mayUseServer = serverOk && (p.src == id || border || gateway);
+        // Server first only if configured; otherwise the server helps after an ACK timeout (attempt > 0).
+        if (mayUseServer && (cfg.serverFirst || p.attempt > 0)) {
             server.send(p.dst, p.encode());
             return;
         }
         int dstZone = zones.zoneOf(p.dst);
         if (dstZone == info.zone) {
             forwardInZone(p, from);
-        } else if (gateway) {
-            forwardBackbone(p, dstZone);
-        } else {
-            forwardInZone(p, from); // toward a gateway
+            return;
         }
+        int hop = backboneHop(dstZone);
+        if (hop >= 0) {
+            transport.send(hop, p.encode());
+            return;
+        }
+        boolean fromBackbone = from >= 0 && !zonePeers.contains(from);
+        boolean ownsBackbone = cfg.fullMesh ? (border && fromBackbone) : (border || gateway);
+        if (ownsBackbone) {
+            if (mayUseServer) {            // no mesh route right now: the server helps
+                server.send(p.dst, p.encode());
+            } else {
+                storeForLater(p, clock.nowMs() + cfg.storeTtlMs);
+            }
+        } else {
+            forwardInZone(p, from);        // hand it to a border node of my zone
+        }
+    }
+
+    /** A direct link to the destination zone if I have one, else (ring mode) the greedy closer peer. */
+    private int backboneHop(int dstZone) {
+        int chosen = -1;
+        int seen = 0;
+        for (int peer : backbonePeers) {
+            if (zones.zoneOf(peer) == dstZone && rng.nextInt(++seen) == 0) chosen = peer; // random among direct links
+        }
+        if (chosen >= 0 || cfg.fullMesh || backbonePeers.isEmpty()) return chosen;
+        return ZoneRouter.chooseNextHop(info.zone, dstZone, cfg.zoneCount, backbonePeers, zones, peer -> true);
     }
 
     /** Unicast along a learned route if there is a live one, otherwise flood. Retransmissions always flood. */
@@ -300,7 +330,10 @@ public final class MeshNode implements Transport.Listener {
 
     private void fireFlood(Pending pd) {
         pending.remove(dedupKey(pd.packet));
-        if (!gateway && cfg.counterThreshold > 0 && pd.heardFrom.size() >= cfg.counterThreshold) {
+        // In ring mode a gateway is the only way out of the zone, so it never stays silent.
+        // In full-mesh mode most nodes are border nodes with several parallel links, so none is critical.
+        boolean critical = gateway && !cfg.fullMesh;
+        if (!critical && cfg.counterThreshold > 0 && pd.heardFrom.size() >= cfg.counterThreshold) {
             if (listener != null) listener.onFloodSuppressed(this, pd.packet);
             return;
         }
@@ -308,22 +341,13 @@ public final class MeshNode implements Transport.Listener {
         for (int peer : zonePeers) {
             if (!pd.heardFrom.contains(peer)) targets.add(peer);
         }
-        if (!gateway && cfg.floodFanout > 0 && targets.size() > cfg.floodFanout) {
+        if (!critical && cfg.floodFanout > 0 && targets.size() > cfg.floodFanout) {
             Collections.shuffle(targets, rng);
             targets = targets.subList(0, cfg.floodFanout);
         }
         if (targets.isEmpty()) return;
         byte[] bytes = pd.packet.encode();
         for (int peer : targets) transport.send(peer, bytes);
-    }
-
-    private void forwardBackbone(Packet p, int dstZone) {
-        int next = ZoneRouter.chooseNextHop(info.zone, dstZone, cfg.zoneCount, backbonePeers, zones, peer -> true);
-        if (next >= 0) {
-            transport.send(next, p.encode());
-        } else {
-            storeForLater(p, clock.nowMs() + cfg.storeTtlMs);
-        }
     }
 
     private void storeForLater(Packet p, long expiresAtMs) {
@@ -343,10 +367,9 @@ public final class MeshNode implements Transport.Listener {
                 retryScheduled = false;
                 for (StoreAndForward.Item item : store.takeAll(clock.nowMs())) {
                     int dstZone = zones.zoneOf(item.packet.dst);
-                    if (gateway && dstZone != info.zone) {
-                        int next = ZoneRouter.chooseNextHop(info.zone, dstZone, cfg.zoneCount,
-                                backbonePeers, zones, peer -> true);
-                        if (next >= 0) transport.send(next, item.packet.encode());
+                    if (dstZone != info.zone && (!backbonePeers.isEmpty() || gateway)) {
+                        int hop = backboneHop(dstZone);
+                        if (hop >= 0) transport.send(hop, item.packet.encode());
                         else storeForLater(item.packet, item.expiresAtMs);
                     } else {
                         route(item.packet, LOCAL); // role changed: normal routing decides

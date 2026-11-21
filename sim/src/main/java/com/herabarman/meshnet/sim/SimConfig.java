@@ -43,6 +43,17 @@ public final class SimConfig implements Cloneable {
     public long ackTimeoutMs = 3_000;
     public int maxRetries = 2;
 
+    /**
+     * "full": every zone has direct offline links to every other zone. "chord": ring plus shortcut links
+     * (scales to millions of nodes). "auto": full when there are at most fullMeshMaxZones zones, else chord.
+     */
+    public String backbone = "auto";
+    /** Offline links between each pair of zones (spread over different border nodes), full mode only. */
+    public int linksPerPair = 2;
+    public int fullMeshMaxZones = 64;
+    /** false: the mesh is the main path and the server only helps. true: online senders use the server first. */
+    public boolean serverFirst = false;
+
     /** Messages per conversation (a pair that talks back and forth). 1 = every message is a new pair. */
     public int conversationLength = 6;
 

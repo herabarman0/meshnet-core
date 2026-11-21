@@ -188,10 +188,13 @@ final class DashboardSim {
     synchronized void kill(int id) { if (id >= 0 && id < cfg.nodes) { net.killNode(id); addLog("নোড " + id + " বন্ধ"); } }
     synchronized void revive(int id) { if (id >= 0 && id < cfg.nodes) { net.reviveNode(id); addLog("নোড " + id + " চালু"); } }
 
+    /** Ring mode: all gateways of the zone. Full mesh: two of its border nodes (almost every node is one). */
     synchronized void killGateways(int zone) {
         if (zone < 0 || zone >= net.zoneCount) return;
-        for (int g : net.gatewaysOf(zone)) net.killNode(g);
-        addLog("জোন " + zone + "-এর গেটওয়ে বন্ধ, নতুন নির্বাচন আসছে");
+        List<Integer> victims = net.gatewaysOf(zone);
+        int limit = net.isFullMesh() ? Math.max(1, cfg.gatewayCount) : victims.size();
+        for (int i = 0; i < Math.min(limit, victims.size()); i++) net.killNode(victims.get(i));
+        addLog("জোন " + zone + "-এর " + Math.min(limit, victims.size()) + "টা বর্ডার নোড বন্ধ");
     }
 
     /** Live settings apply at once, structural ones rebuild the network. */
@@ -204,7 +207,12 @@ final class DashboardSim {
         boolean routes = boolOf(q, "routes", cfg.routeLearning);
         boolean ack = boolOf(q, "ack", cfg.ackEnabled);
         boolean suppress = boolOf(q, "suppress", cfg.floodJitterMs > 0);
-        if (nodes != cfg.nodes || zoneSize != cfg.zoneSize || gateways != cfg.gatewayCount
+        String backbone = q.containsKey("backbone") ? q.get("backbone") : cfg.backbone;
+        if (!"full".equals(backbone) && !"chord".equals(backbone)) backbone = "auto";
+        int links = clamp(intOf(q, "links", cfg.linksPerPair), 1, 4);
+        boolean serverFirst = boolOf(q, "serverFirst", cfg.serverFirst);
+        if (!backbone.equals(cfg.backbone) || links != cfg.linksPerPair || serverFirst != cfg.serverFirst
+                || nodes != cfg.nodes || zoneSize != cfg.zoneSize || gateways != cfg.gatewayCount
                 || Math.abs(online - cfg.onlineRatio) > 1e-9 || routes != cfg.routeLearning
                 || ack != cfg.ackEnabled || suppress != (cfg.floodJitterMs > 0)) {
             rebuild = true;
@@ -216,6 +224,9 @@ final class DashboardSim {
         next.onlineRatio = online;
         next.routeLearning = routes;
         next.ackEnabled = ack;
+        next.backbone = backbone;
+        next.linksPerPair = links;
+        next.serverFirst = serverFirst;
         next.floodJitterMs = suppress ? 40 : 0;
         next.counterThreshold = suppress ? 3 : 0;
         next.jitterMs = 10;
@@ -249,7 +260,10 @@ final class DashboardSim {
                 .append(",\"traffic\":").append((int) trafficPerMin)
                 .append(",\"routes\":").append(cfg.routeLearning)
                 .append(",\"ack\":").append(cfg.ackEnabled)
-                .append(",\"suppress\":").append(cfg.floodJitterMs > 0).append('}');
+                .append(",\"suppress\":").append(cfg.floodJitterMs > 0)
+                .append(",\"backbone\":\"").append(net.isFullMesh() ? "full" : "chord").append('"')
+                .append(",\"links\":").append(cfg.linksPerPair)
+                .append(",\"serverFirst\":").append(cfg.serverFirst).append('}');
 
         sb.append(",\"st\":\"");
         for (int i = 0; i < cfg.nodes; i++) {

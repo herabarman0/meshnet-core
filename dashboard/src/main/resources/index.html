@@ -56,8 +56,8 @@
   <span><i style="background:#00E5A0"></i>অনলাইন</span>
   <span><i style="background:#8b93a5"></i>অফলাইন</span>
   <span><i style="background:transparent;border:2px solid #ff5c5c"></i>বন্ধ</span>
-  <span><i style="background:#00E5A0;box-shadow:0 0 0 2px #fff"></i>গেটওয়ে</span>
-  <span><i class="line" style="background:#ffb84d"></i>ব্যাকবোন</span>
+  <span><i style="background:#00E5A0;box-shadow:0 0 0 2px #fff"></i>গেটওয়ে (রিং মোডে)</span>
+  <span><i class="line" style="background:#ffb84d"></i>জোন↔জোন অফলাইন লিংক</span>
   <span><i class="line" style="background:#4da3ff"></i>শেখা পথ</span>
   <span><i style="background:#fff"></i>ডেটা</span>
   <span><i style="background:#4da3ff"></i>ACK</span>
@@ -77,7 +77,7 @@
   <div class="row" style="margin-top:8px">
     <button id="killA" class="danger" disabled>A বন্ধ করুন</button>
     <button id="reviveA" disabled>A চালু করুন</button>
-    <button id="killGW" class="danger" disabled>A-এর জোনের গেটওয়ে বন্ধ</button>
+    <button id="killGW" class="danger" disabled>A-এর জোনের বর্ডার নোড বন্ধ</button>
   </div>
   <div class="hint" style="margin-top:8px">প্রথম মেসেজ ফ্লাড হয়। একই জোড়ায় দ্বিতীয় মেসেজ পাঠিয়ে দেখুন: শেখা পথে সরাসরি যাবে।</div>
 </section>
@@ -91,7 +91,7 @@
     <div class="cell"><b id="mDup">–</b><span>ডুপ্লিকেট</span></div>
     <div class="cell"><b id="mAck">–</b><span>ACK</span></div>
     <div class="cell"><b id="mRetry">–</b><span>রিট্রাই</span></div>
-    <div class="cell"><b id="mSup">–</b><span>ফ্লাড কমানো</span></div>
+    <div class="cell"><b id="mSrv">–</b><span>সার্ভার দিয়ে</span></div>
   </div>
 </section>
 
@@ -106,6 +106,15 @@
   <label class="s"><span>জোনের আকার</span><b id="vZone">12</b><input id="zoneSize" type="range" min="6" max="24" step="1" value="12"></label>
   <label class="s"><span>অনলাইন %</span><b id="vOnline">20</b><input id="online" type="range" min="0" max="100" step="5" value="20"></label>
   <label class="s"><span>গেটওয়ে প্রতি জোনে</span><b id="vGw">2</b><input id="gateways" type="range" min="1" max="3" step="1" value="2"></label>
+  <div class="row" style="margin:10px 0">
+    <span class="hint" style="align-self:center">জোনগুলোর সংযোগ</span>
+    <select id="backbone">
+      <option value="full">প্রতিটা জোন প্রতিটা জোনের সাথে (পূর্ণ মেশ)</option>
+      <option value="chord">রিং + শর্টকাট (বড় নেটওয়ার্কের জন্য)</option>
+    </select>
+  </div>
+  <label class="s"><span>দুই জোনের মধ্যে অফলাইন লিংক</span><b id="vLinks">2</b><input id="links" type="range" min="1" max="4" step="1" value="2"></label>
+  <label class="c"><input id="serverFirst" type="checkbox">সার্ভার-প্রথম (বন্ধ থাকলে মেশই মূল পথ, অনলাইন শুধু সাহায্য করে)</label>
   <label class="c"><input id="suppress" type="checkbox" checked>ফ্লাড কমানো (sender/counter suppression)</label>
   <label class="c"><input id="routes" type="checkbox" checked>রুট লার্নিং</label>
   <label class="c"><input id="ack" type="checkbox" checked>ACK + ফলব্যাক</label>
@@ -213,7 +222,7 @@ function draw(now) {
   ctx.strokeStyle = "rgba(0,229,160,0.11)"; ctx.lineWidth = 1; ctx.stroke();
 
   lines(S.intra, "rgba(139,147,165,0.28)", 1);
-  lines(S.bb, "rgba(255,184,77,0.55)", 1.2);
+  lines(S.bb, "rgba(255,184,77,0.75)", 1.4);
 
   if (S.route && S.route.length > 1) {
     ctx.beginPath();
@@ -223,7 +232,8 @@ function draw(now) {
 
   for (let i = 0; i < S.n; i++) {
     const f = S.st.charCodeAt(i) - 48, p = pos[i];
-    const alive = f & 1, online = f & 2, gw = f & 4;
+    const alive = f & 1, online = f & 2;
+    const gw = (S.settings && S.settings.backbone === "chord") ? (f & 4) : 0;   // in full mesh most nodes are border nodes
     ctx.beginPath();
     ctx.arc(p.x, p.y, gw ? 4.6 : 2.6, 0, 6.2832);
     if (!alive) { ctx.strokeStyle = "#ff5c5c"; ctx.lineWidth = 1.3; ctx.stroke(); continue; }
@@ -292,13 +302,13 @@ function render() {
   $("mDup").textContent = m.sent ? fmtPct(m.dupRatio) : "–";
   $("mAck").textContent = m.acked + "/" + m.sent;
   $("mRetry").textContent = m.retries;
-  $("mSup").textContent = m.suppressed;
+  $("mSrv").textContent = m.delivered ? fmtPct(m.viaServer / m.delivered) : "–";
   $("log").textContent = S.log.length ? S.log.slice().reverse().join("\n") : "এখনো কিছু নেই";
 
   if (selA >= 0 && S.selA) {
     const a = S.selA;
     $("selInfo").textContent = "A = নোড " + a.id + " · জোন " + a.zone + " · " + (a.alive ? (a.online ? "অনলাইন" : "অফলাইন") : "বন্ধ")
-      + (a.gateway ? " · গেটওয়ে" : "") + " · ব্যাটারি " + Math.round(a.battery * 100) + "% · সিগন্যাল " + Math.round(a.signal * 100) + "%"
+      + (a.gateway ? (S.settings.backbone === "chord" ? " · গেটওয়ে" : " · বর্ডার নোড (অন্য জোনের সাথে অফলাইন লিংক আছে)") : "") + " · ব্যাটারি " + Math.round(a.battery * 100) + "% · সিগন্যাল " + Math.round(a.signal * 100) + "%"
       + (selB >= 0 ? "   |   B = নোড " + selB + " · জোন " + Math.floor(Math.min(selB / S.zoneSize, S.zoneCount - 1)) : "");
   } else {
     $("selInfo").textContent = "একটা নোডে ট্যাপ করুন (A), তারপর আরেকটায় (B)।";
@@ -322,6 +332,7 @@ function loadSettings() {
   set("online", s.online, "vOnline"); set("gateways", s.gateways, "vGw");
   set("loss", s.loss, "vLoss"); set("churn", s.churn, "vChurn"); set("traffic", s.traffic, "vTraffic");
   $("suppress").checked = s.suppress; $("routes").checked = s.routes; $("ack").checked = s.ack;
+  $("backbone").value = s.backbone; set("links", s.links, "vLinks"); $("serverFirst").checked = s.serverFirst;
   $("showAll").checked = S.showAll; $("speed").value = String(S.speed);
   settingsLoaded = true;
 }
@@ -384,7 +395,7 @@ $("killGW").addEventListener("click", () => {
 });
 $("pause").addEventListener("click", () => act("/api/config?paused=" + (S && S.paused ? 0 : 1)));
 
-for (const [id, label] of [["nodes", "vNodes"], ["zoneSize", "vZone"], ["online", "vOnline"], ["gateways", "vGw"],
+for (const [id, label] of [["links", "vLinks"], ["nodes", "vNodes"], ["zoneSize", "vZone"], ["online", "vOnline"], ["gateways", "vGw"],
                            ["loss", "vLoss"], ["churn", "vChurn"], ["traffic", "vTraffic"]]) {
   $(id).addEventListener("input", () => { $(label).textContent = $(id).value; });
 }
@@ -395,7 +406,8 @@ $("showAll").addEventListener("change", () => act("/api/config?showAll=" + ($("s
 $("speed").addEventListener("change", () => act("/api/config?speed=" + $("speed").value));
 $("apply").addEventListener("click", async () => {
   const q = ["nodes", "zoneSize", "online", "gateways"].map((id) => id + "=" + $(id).value);
-  for (const id of ["suppress", "routes", "ack"]) q.push(id + "=" + ($(id).checked ? 1 : 0));
+  for (const id of ["suppress", "routes", "ack", "serverFirst"]) q.push(id + "=" + ($(id).checked ? 1 : 0));
+  q.push("backbone=" + $("backbone").value, "links=" + $("links").value);
   q.push("reset=1");
   selA = -1; selB = -1; lastSeq = 0; anims = [];
   await act("/api/config?" + q.join("&"));

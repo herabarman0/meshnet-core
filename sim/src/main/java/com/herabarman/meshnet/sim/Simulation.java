@@ -12,6 +12,7 @@ public final class Simulation {
     public static Metrics run(final SimConfig cfg) {
         final SimNetwork net = new SimNetwork(cfg);
         final Random r = new Random(cfg.seed + 1);
+        net.metrics.backbone = net.isFullMesh() ? "full zone mesh" : "ring+shortcuts";
 
         // Churn: every interval some nodes go down and come back 5-20 s later.
         for (long t = cfg.churnIntervalMs; t < cfg.durationMs; t += cfg.churnIntervalMs) {

@@ -50,6 +50,9 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
     private final HashSet<Integer>[] links;
     private final List<List<Integer>> gateways = new ArrayList<>();
     private final boolean[] electionPending;
+    private final boolean fullMesh;
+    private final int[] bbDegree;
+    private final Set<Integer> repairPending = new HashSet<>();
     private final Map<Long, Long> sentAt = new HashMap<>();
     private Tracer tracer;
 
@@ -60,6 +63,11 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         this.n = cfg.nodes;
         this.zoneCount = Math.max(1, n / cfg.zoneSize);
         this.rng = new Random(cfg.seed);
+        String mode = cfg.backbone == null ? "auto" : cfg.backbone;
+        this.fullMesh = zoneCount > 1 && ("full".equals(mode) || ("auto".equals(mode) && zoneCount <= cfg.fullMeshMaxZones));
+        this.bbDegree = new int[n];
+        this.meshCfg.fullMesh = fullMesh;
+        this.meshCfg.serverFirst = cfg.serverFirst;
         this.meshCfg.zoneCount = zoneCount;
         this.meshCfg.floodJitterMs = cfg.floodJitterMs;
         this.meshCfg.counterThreshold = cfg.counterThreshold;
@@ -142,9 +150,15 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         }
         for (int z = 0; z < zoneCount; z++) gateways.add(new ArrayList<Integer>());
         buildIntraZoneLinks();
-        electInitialGateways();
-        for (int z = 0; z < zoneCount; z++) rebuildBackboneFor(z);
+        if (fullMesh) {
+            buildFullMesh();
+        } else {
+            electInitialGateways();
+            for (int z = 0; z < zoneCount; z++) rebuildBackboneFor(z);
+        }
     }
+
+    public boolean isFullMesh() { return fullMesh; }
 
     // ---- addressing -------------------------------------------------------------------------
 
@@ -158,23 +172,100 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
 
     public NodeInfo info(int id) { return infos[id]; }
     public MeshNode node(int id) { return nodes[id]; }
-    public List<Integer> gatewaysOf(int zone) { return new ArrayList<>(gateways.get(zone)); }
+    /** Gateways (ring mode) or border nodes, i.e. nodes with offline links to other zones (full mesh). */
+    public List<Integer> gatewaysOf(int zone) {
+        if (!fullMesh) return new ArrayList<>(gateways.get(zone));
+        List<Integer> out = new ArrayList<>();
+        for (int i = zoneStart(zone); i < zoneEnd(zone); i++) if (infos[i].alive && bbDegree[i] > 0) out.add(i);
+        return out;
+    }
 
     // ---- topology ---------------------------------------------------------------------------
 
     private void connect(int a, int b) {
         if (a == b) return;
-        links[a].add(b);
+        boolean added = links[a].add(b);
         links[b].add(a);
+        if (added && zoneOf(a) != zoneOf(b)) {
+            bbDegree[a]++;
+            bbDegree[b]++;
+            if (fullMesh) {
+                nodes[a].setGateway(true);
+                nodes[b].setGateway(true);
+            }
+        }
         nodes[a].onPeerUp(b);
         nodes[b].onPeerUp(a);
     }
 
     private void disconnect(int a, int b) {
-        links[a].remove(b);
+        boolean had = links[a].remove(b);
         links[b].remove(a);
+        if (had && zoneOf(a) != zoneOf(b)) {
+            bbDegree[a]--;
+            bbDegree[b]--;
+            if (fullMesh) {
+                nodes[a].setGateway(bbDegree[a] > 0);
+                nodes[b].setGateway(bbDegree[b] > 0);
+            }
+        }
         nodes[a].onPeerDown(b);
         nodes[b].onPeerDown(a);
+    }
+
+    // ---- full zone-to-zone mesh -------------------------------------------------------------
+
+    /** Every pair of zones gets linksPerPair offline links, each between different border nodes. */
+    private void buildFullMesh() {
+        for (int a = 0; a < zoneCount; a++) {
+            for (int b = a + 1; b < zoneCount; b++) linkPair(a, b, cfg.linksPerPair);
+        }
+    }
+
+    private void linkPair(int a, int b, int count) {
+        for (int j = 0; j < count; j++) {
+            int na = pickBorder(a);
+            int nb = pickBorder(b);
+            if (na < 0 || nb < 0) return;
+            connect(na, nb);
+        }
+    }
+
+    /** Alive member with the fewest offline links to other zones (best score on ties), so the load is spread. */
+    private int pickBorder(int zone) {
+        int best = -1;
+        for (int i = zoneStart(zone); i < zoneEnd(zone); i++) {
+            if (!infos[i].alive) continue;
+            if (best < 0 || bbDegree[i] < bbDegree[best]
+                    || (bbDegree[i] == bbDegree[best] && gm.score(infos[i]) > gm.score(infos[best]))) {
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    private int liveLinks(int a, int b) {
+        int count = 0;
+        for (int i = zoneStart(a); i < zoneEnd(a); i++) {
+            if (!infos[i].alive) continue;
+            for (int nb : links[i]) if (zoneOf(nb) == b && infos[nb].alive) count++;
+        }
+        return count;
+    }
+
+    private void scheduleRepair(int a, int b) {
+        final int lo = Math.min(a, b);
+        final int hi = Math.max(a, b);
+        final int key = lo * zoneCount + hi;
+        if (!repairPending.add(key)) return;
+        clock.schedule(cfg.electionDelayMs, new Runnable() {
+            @Override
+            public void run() {
+                repairPending.remove(key);
+                int need = cfg.linksPerPair - liveLinks(lo, hi);
+                if (need > 0) linkPair(lo, hi, need);
+            }
+        });
     }
 
     /** Ring through the zone plus one random chord per node: about 3-5 links per node. */
@@ -228,7 +319,11 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         if (!infos[id].alive) return;
         infos[id].alive = false;
         for (int nb : links[id]) nodes[nb].onPeerDown(id);
-        if (nodes[id].isGateway()) scheduleElection(zoneOf(id));
+        if (fullMesh) {
+            for (int nb : links[id]) if (zoneOf(nb) != zoneOf(id)) scheduleRepair(zoneOf(id), zoneOf(nb));
+        } else if (nodes[id].isGateway()) {
+            scheduleElection(zoneOf(id));
+        }
     }
 
     public void reviveNode(int id) {
@@ -242,6 +337,7 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
                 nodes[id].onPeerDown(nb);
             }
         }
+        if (fullMesh) return;
         int z = zoneOf(id);
         int aliveGateways = 0;
         for (int g : gateways.get(z)) if (infos[g].alive) aliveGateways++;
@@ -329,7 +425,11 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
 
     public List<Integer> allGateways() {
         List<Integer> out = new ArrayList<>();
-        for (List<Integer> g : gateways) out.addAll(g);
+        if (fullMesh) {
+            for (int z = 0; z < zoneCount; z++) out.addAll(gatewaysOf(z));
+        } else {
+            for (List<Integer> g : gateways) out.addAll(g);
+        }
         return out;
     }
 

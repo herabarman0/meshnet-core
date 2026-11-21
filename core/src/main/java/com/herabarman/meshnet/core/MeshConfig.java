@@ -41,4 +41,17 @@ public final class MeshConfig {
     public boolean ackEnabled = true;
     public long ackTimeoutMs = 3_000;
     public int maxRetries = 2;
+
+    // ---- zone-to-zone mesh and the role of the server ----
+    /**
+     * True when every zone has direct offline links to every other zone (spread over several border
+     * nodes). A missing direct link to the destination zone then means "ask another node of my zone".
+     * False = ring with shortcut links, forwarded greedily by gateways.
+     */
+    public boolean fullMesh = false;
+    /**
+     * false (default): the mesh is the main path, the server only helps: when the mesh has no route
+     * and after an ACK timeout. true: an online sender goes straight through the server.
+     */
+    public boolean serverFirst = false;
 }

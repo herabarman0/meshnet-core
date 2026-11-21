@@ -11,10 +11,22 @@ Pure-Java mesh engine + simulator. Package `com.herabarman.meshnet`.
 
 ## Topology
 1. Zone = P2P cluster (8-20 nodes, ring + random chords). Flooding only inside the zone (TTL + dedup).
-2. 1-2 gateways per zone, elected by battery + signal + internet. Re-elected on failure, healthy ones keep their role.
-3. Backbone: zones sit on a ring, each zone links to zones at +-1, +-2, +-4 ... Greedy routing, about log2(zones) hops.
-4. Server fast path: the sender or a gateway with internet sends straight through the server if the destination is online.
-5. No route? Store-and-forward queue (priority, expiry, size cap), retried on a timer.
+2. **Full zone mesh (default up to 64 zones):** every zone has direct offline links to every other zone,
+   `linksPerPair` (default 2) links per pair, each between different border nodes, so the load is spread
+   and no single user going offline disconnects two zones. A dead border node is replaced by another
+   member after the election delay. For N zones that is N(N-1)/2 zone pairs, so it only fits small and
+   medium networks.
+3. **Ring + shortcuts (automatic above 64 zones):** zones sit on a ring with links at +-1, +-2, +-4 ...,
+   1-2 gateways per zone (elected by battery + signal + internet), greedy routing, about log2(zones) hops.
+   This is what makes 1,000,000 nodes possible.
+4. **The server only helps.** The mesh is the main path. The server is used when the mesh has no route
+   right now, and for retries after an ACK timeout. `serverFirst = true` restores "online sender goes
+   straight through the server".
+5. No route at all? Store-and-forward queue (priority, expiry, size cap), retried on a timer.
+
+Physical note: a zone-to-zone link is a logical link between two phones. Two zones can only really link
+offline if some of their users are within radio range (Bluetooth about 10-100 m, Wi-Fi Direct a bit more).
+Zones far apart still reach each other, but through the zones in between.
 
 Packet header is 22 bytes. AES-GCM nonce is derived from msgId+src, so encryption adds only the 16 byte tag.
 
@@ -54,8 +66,8 @@ Reproduce: `java -cp ... com.herabarman.meshnet.sim.FloodBench 10000 3`.
     java -cp core/build/classes/java/main:sim/build/classes/java/main:dashboard/build/classes/java/main:dashboard/build/resources/main \
          com.herabarman.meshnet.dashboard.DashboardMain --port 8080
 
-Shows zones (dashed circles), nodes (green = online, grey = offline, red ring = down), gateways (white ring),
-backbone links (amber), and the learned route between the selected nodes A and B (blue).
+Shows zones (dashed circles), nodes (green = online, grey = offline, red ring = down), gateways (white ring, ring mode only),
+zone-to-zone offline links (amber), and the learned route between the selected nodes A and B (blue).
 Tap a node for A, another for B. Buttons: local / remote / A to B message (packets fly as dots, ACKs in blue,
 server path in purple), kill A, revive A, kill the gateways of A's zone, pause. Settings: nodes, zone size,
 online %, gateways, flood suppression / route learning / ACK on or off (these rebuild the network), and live
@@ -63,11 +75,22 @@ sliders for packet loss, churn, background traffic, speed (0.1x to 20x).
 It binds to 127.0.0.1 only (`--host 0.0.0.0` to open it to your network, but the page can kill nodes).
 Keep nodes under about 600 so the picture stays readable.
 
+Measured (1,000 nodes in 40 zones, same traffic, 20% online, churn and gateway failures on):
+
+| backbone | server | delivery | avg hops | avg latency | tx/message |
+|---|---|---|---|---|---|
+| ring + shortcuts | first | 99.9% | 4.93 | 213 ms | 34.6 |
+| ring + shortcuts | helps only | 99.9% | 5.40 | 229 ms | 28.4 |
+| full zone mesh | first | 99.9% | 4.09 | 160 ms | 30.8 |
+| **full zone mesh** | **helps only (default)** | 99.9% | 4.27 | 164 ms | 24.2 |
+
+100,000 nodes (ring, 6,666 zones): 100% delivered, 6.3 hops, 330 ms.
+
 ## Run
     gradle test
     gradle :sim:run --args="--nodes 1000,10000,100000 --messages 2000 --csv results.csv"
 
-Options: --zoneSize --gateways --online --churn --gwFail --messages --local --loss --seed --encrypt --csv
+Options: --backbone auto|full|chord --links 2 --serverFirst false --zoneSize --gateways --online --churn --gwFail --messages --local --loss --seed --encrypt --csv
 
 ## Porting to the app
 Implement `Transport` over Bluetooth/Wi-Fi Direct (peerId = stable int per device), a `Clock` over Handler,
