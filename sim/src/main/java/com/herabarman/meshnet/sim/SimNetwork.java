@@ -67,7 +67,7 @@ public final class SimNetwork implements ZoneRouter.ZoneMap {
         this.fullMesh = zoneCount > 1 && ("full".equals(mode) || ("auto".equals(mode) && zoneCount <= cfg.fullMeshMaxZones));
         this.bbDegree = new int[n];
         this.meshCfg.fullMesh = fullMesh;
-        this.meshCfg.serverFirst = cfg.serverFirst;
+        this.meshCfg.deliveryMode = cfg.mode;
         this.meshCfg.zoneCount = zoneCount;
         this.meshCfg.floodJitterMs = cfg.floodJitterMs;
         this.meshCfg.counterThreshold = cfg.counterThreshold;

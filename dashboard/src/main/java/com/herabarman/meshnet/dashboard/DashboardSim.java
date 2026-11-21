@@ -1,5 +1,6 @@
 package com.herabarman.meshnet.dashboard;
 
+import com.herabarman.meshnet.core.DeliveryMode;
 import com.herabarman.meshnet.core.MeshNode;
 import com.herabarman.meshnet.core.NodeInfo;
 import com.herabarman.meshnet.core.Packet;
@@ -210,8 +211,11 @@ final class DashboardSim {
         String backbone = q.containsKey("backbone") ? q.get("backbone") : cfg.backbone;
         if (!"full".equals(backbone) && !"chord".equals(backbone)) backbone = "auto";
         int links = clamp(intOf(q, "links", cfg.linksPerPair), 1, 4);
-        boolean serverFirst = boolOf(q, "serverFirst", cfg.serverFirst);
-        if (!backbone.equals(cfg.backbone) || links != cfg.linksPerPair || serverFirst != cfg.serverFirst
+        DeliveryMode mode = cfg.mode;
+        if (q.containsKey("mode")) {
+            try { mode = DeliveryMode.valueOf(q.get("mode").toUpperCase().replace('-', '_')); } catch (IllegalArgumentException ignored) { }
+        }
+        if (!backbone.equals(cfg.backbone) || links != cfg.linksPerPair || mode != cfg.mode
                 || nodes != cfg.nodes || zoneSize != cfg.zoneSize || gateways != cfg.gatewayCount
                 || Math.abs(online - cfg.onlineRatio) > 1e-9 || routes != cfg.routeLearning
                 || ack != cfg.ackEnabled || suppress != (cfg.floodJitterMs > 0)) {
@@ -226,7 +230,7 @@ final class DashboardSim {
         next.ackEnabled = ack;
         next.backbone = backbone;
         next.linksPerPair = links;
-        next.serverFirst = serverFirst;
+        next.mode = mode;
         next.floodJitterMs = suppress ? 40 : 0;
         next.counterThreshold = suppress ? 3 : 0;
         next.jitterMs = 10;
@@ -263,7 +267,7 @@ final class DashboardSim {
                 .append(",\"suppress\":").append(cfg.floodJitterMs > 0)
                 .append(",\"backbone\":\"").append(net.isFullMesh() ? "full" : "chord").append('"')
                 .append(",\"links\":").append(cfg.linksPerPair)
-                .append(",\"serverFirst\":").append(cfg.serverFirst).append('}');
+                .append(",\"mode\":\"").append(cfg.mode.name().toLowerCase().replace('_', '-')).append("\"}");
 
         sb.append(",\"st\":\"");
         for (int i = 0; i < cfg.nodes; i++) {

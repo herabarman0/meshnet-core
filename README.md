@@ -19,9 +19,11 @@ Pure-Java mesh engine + simulator. Package `com.herabarman.meshnet`.
 3. **Ring + shortcuts (automatic above 64 zones):** zones sit on a ring with links at +-1, +-2, +-4 ...,
    1-2 gateways per zone (elected by battery + signal + internet), greedy routing, about log2(zones) hops.
    This is what makes 1,000,000 nodes possible.
-4. **The server only helps.** The mesh is the main path. The server is used when the mesh has no route
-   right now, and for retries after an ACK timeout. `serverFirst = true` restores "online sender goes
-   straight through the server".
+4. **Three delivery modes** (`DeliveryMode`, same engine, one switch):
+   - `OFFLINE_ONLY`: the server is never used.
+   - `OFFLINE_FIRST` (default): the mesh is the main path; the server helps when the mesh has no route
+     right now and for retries after an ACK timeout.
+   - `ONLINE_FIRST`: an online sender or border node goes straight through the server.
 5. No route at all? Store-and-forward queue (priority, expiry, size cap), retried on a timer.
 
 Physical note: a zone-to-zone link is a logical link between two phones. Two zones can only really link
@@ -29,6 +31,45 @@ offline if some of their users are within radio range (Bluetooth about 10-100 m,
 Zones far apart still reach each other, but through the zones in between.
 
 Packet header is 22 bytes. AES-GCM nonce is derived from msgId+src, so encryption adds only the 16 byte tag.
+
+## Using it in an app (developer guide)
+Simplest way, `MeshEngine` (thread-safe, handles timers and threads for you):
+
+    MeshEngine engine = MeshEngine.builder(myNodeId)
+        .zone(myZoneId).zoneCount(40).zones(ZoneRouter.blockZones(16))
+        .transport(myBluetoothTransport)                      // you implement 3 methods
+        .server(myWebSocketBridge)                            // optional internet helper
+        .mode(DeliveryMode.OFFLINE_FIRST)
+        .crypto(new AesGcmCrypto(key32))                      // optional
+        .storage(new FileStorage(new File(filesDir, "mesh"))) // optional: survive restarts
+        .onMessage((from, bytes) -> ...)
+        .onDelivery(listener)                                 // onAcked / onFailed
+        .build();
+    engine.start();                  // restores queued + unconfirmed messages from disk
+    long id = engine.send(otherNodeId, bytes);
+    engine.stop();
+
+Callbacks run on the engine thread: post to your UI thread before touching views.
+
+**Every part also works alone:**
+
+| class | use it for |
+|---|---|
+| `Packet` | the 22 byte binary wire format (encode / decode, type, attempt, TTL) |
+| `DedupCache` | "have I seen this message id" with expiry and size cap |
+| `RouteCache` | LRU next-hop table with expiry |
+| `StoreAndForward` | priority queue for messages without a route; optionally disk-backed |
+| `StorageAdapter` | implement over SQLite / Room / MMKV; `FileStorage` and `MemoryStorage` included |
+| `GatewayManager` | score and elect gateways, re-elect without flapping |
+| `ZoneRouter` | zone ring, shortcut links, greedy next hop |
+| `AesGcmCrypto`, `KeyExchange` | payload encryption with 16 byte overhead, X25519 |
+| `MeshNode` | the whole engine without threading, for your own scheduler or for simulation |
+| `Transport`, `ServerBridge`, `Clock` | the three things you plug in |
+| `sim` module | test routing changes on 1,000 to 1,000,000 virtual nodes before shipping them |
+
+Persistence: queued packets (`sf-*`) and messages sent but not yet confirmed (`out-*`) are written to the
+StorageAdapter. After a crash or restart `start()` brings them back and re-sends the unconfirmed ones.
+Not persisted yet: learned routes (soft state, relearned in one flood) and the "already delivered" list.
 
 ## Flood optimisation (inside a zone)
 Relays wait a random 0..`floodJitterMs` before forwarding. While waiting they note which neighbours already
@@ -90,7 +131,7 @@ Measured (1,000 nodes in 40 zones, same traffic, 20% online, churn and gateway f
     gradle test
     gradle :sim:run --args="--nodes 1000,10000,100000 --messages 2000 --csv results.csv"
 
-Options: --backbone auto|full|chord --links 2 --serverFirst false --zoneSize --gateways --online --churn --gwFail --messages --local --loss --seed --encrypt --csv
+Options: --backbone auto|full|chord --links 2 --mode offline-first --zoneSize --gateways --online --churn --gwFail --messages --local --loss --seed --encrypt --csv
 
 ## Porting to the app
 Implement `Transport` over Bluetooth/Wi-Fi Direct (peerId = stable int per device), a `Clock` over Handler,

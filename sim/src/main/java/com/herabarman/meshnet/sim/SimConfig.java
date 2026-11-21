@@ -1,5 +1,7 @@
 package com.herabarman.meshnet.sim;
 
+import com.herabarman.meshnet.core.DeliveryMode;
+
 /** All simulation parameters. */
 public final class SimConfig implements Cloneable {
     public int nodes = 10_000;
@@ -51,8 +53,8 @@ public final class SimConfig implements Cloneable {
     /** Offline links between each pair of zones (spread over different border nodes), full mode only. */
     public int linksPerPair = 2;
     public int fullMeshMaxZones = 64;
-    /** false: the mesh is the main path and the server only helps. true: online senders use the server first. */
-    public boolean serverFirst = false;
+    /** OFFLINE_ONLY: no server. OFFLINE_FIRST: the server only helps. ONLINE_FIRST: online senders use the server first. */
+    public DeliveryMode mode = DeliveryMode.OFFLINE_FIRST;
 
     /** Messages per conversation (a pair that talks back and forth). 1 = every message is a new pair. */
     public int conversationLength = 6;

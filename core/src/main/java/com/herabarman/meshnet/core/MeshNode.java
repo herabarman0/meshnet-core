@@ -76,6 +76,7 @@ public final class MeshNode implements Transport.Listener {
     private final Random rng;
     private final DedupCache dedup;
     private final StoreAndForward store;
+    private final StorageAdapter storage;
     private final List<Integer> zonePeers = new ArrayList<>(6);
     private final List<Integer> backbonePeers = new ArrayList<>(2);
     private Listener listener;
@@ -88,6 +89,14 @@ public final class MeshNode implements Transport.Listener {
 
     public MeshNode(NodeInfo info, MeshConfig cfg, Transport transport, Clock clock,
                     ZoneRouter.ZoneMap zones, Crypto crypto, ServerBridge server, Random rng) {
+        this(info, cfg, transport, clock, zones, crypto, server, rng, null);
+    }
+
+    /** @param storage where queued and unconfirmed messages are kept across restarts (null = RAM only) */
+    public MeshNode(NodeInfo info, MeshConfig cfg, Transport transport, Clock clock,
+                    ZoneRouter.ZoneMap zones, Crypto crypto, ServerBridge server, Random rng,
+                    StorageAdapter storage) {
+        this.storage = storage;
         this.id = info.id;
         this.info = info;
         this.cfg = cfg;
@@ -98,7 +107,7 @@ public final class MeshNode implements Transport.Listener {
         this.server = server;
         this.rng = rng;
         this.dedup = new DedupCache(cfg.dedupMaxEntries, cfg.dedupTtlMs);
-        this.store = new StoreAndForward(cfg.storeMaxPackets);
+        this.store = new StoreAndForward(cfg.storeMaxPackets, storage);
         transport.setListener(this);
     }
 
@@ -122,6 +131,60 @@ public final class MeshNode implements Transport.Listener {
         return p.msgId + p.attempt * ATTEMPT_MIX;
     }
 
+    // ---- persistence ------------------------------------------------------------------------
+
+    private static String outboxKey(long ackId) {
+        return "out-" + String.format("%016x", ackId);
+    }
+
+    private void saveOutgoing(long ackId, Outgoing o) {
+        if (storage == null) return;
+        byte[] pk = o.packet.encode();
+        byte[] raw = new byte[1 + pk.length];
+        raw[0] = (byte) o.attempt;
+        System.arraycopy(pk, 0, raw, 1, pk.length);
+        storage.put(outboxKey(ackId), raw);
+    }
+
+    private void forgetOutgoing(long ackId) {
+        if (storage != null) storage.remove(outboxKey(ackId));
+    }
+
+    /**
+     * Call once after construction when a StorageAdapter is used. Brings back the queued packets and
+     * the messages that were sent but never confirmed; the latter are re-sent at once as the next attempt.
+     * @return number of restored queued packets + unconfirmed messages
+     */
+    public int restore() {
+        if (storage == null) return 0;
+        int count = store.restore(clock.nowMs());
+        if (store.size() > 0) scheduleRetry();
+        if (cfg.ackEnabled) {
+            for (String key : storage.keys("out-")) {
+                byte[] raw = storage.get(key);
+                try {
+                    if (raw == null || raw.length < 1 + Packet.HEADER_SIZE) throw new IllegalArgumentException("short");
+                    byte[] pk = new byte[raw.length - 1];
+                    System.arraycopy(raw, 1, pk, 0, pk.length);
+                    Packet p = Packet.decode(pk);
+                    if (p.src != id) throw new IllegalArgumentException("not mine");
+                    Outgoing o = new Outgoing(p);
+                    o.attempt = raw[0] & 0xFF;
+                    if (outgoing == null) outgoing = new HashMap<>();
+                    final long ackId = p.msgId ^ ACK_MASK;
+                    outgoing.put(ackId, o);
+                    clock.schedule(1, new Runnable() {
+                        @Override public void run() { onAckTimeout(ackId); }
+                    });
+                    count++;
+                } catch (IllegalArgumentException e) {
+                    storage.remove(key);
+                }
+            }
+        }
+        return count;
+    }
+
     // ---- sending ----------------------------------------------------------------------------
 
     /** Encrypt and send a message. Returns the message id. */
@@ -133,7 +196,9 @@ public final class MeshNode implements Transport.Listener {
         if (cfg.ackEnabled) {
             if (outgoing == null) outgoing = new HashMap<>();
             long ackId = msgId ^ ACK_MASK;
-            outgoing.put(ackId, new Outgoing(p));
+            Outgoing o = new Outgoing(p);
+            outgoing.put(ackId, o);
+            saveOutgoing(ackId, o);
             scheduleAckTimeout(ackId, 0);
         }
         route(p, LOCAL);
@@ -154,10 +219,12 @@ public final class MeshNode implements Transport.Listener {
         if (o == null) return; // ACK arrived
         if (o.attempt >= cfg.maxRetries) {
             outgoing.remove(ackId);
+            forgetOutgoing(ackId);
             if (listener != null) listener.onDropped(this, o.packet, "no-ack");
             return;
         }
         o.attempt++;
+        saveOutgoing(ackId, o);
         if (routes != null) routes.remove(routeKeyFor(o.packet.dst)); // that route did not work
         Packet retry = o.packet.withAttempt(o.attempt);
         dedup.firstSeen(dedupKey(retry), clock.nowMs());
@@ -208,6 +275,7 @@ public final class MeshNode implements Transport.Listener {
     private void handleLocal(Packet p, int fromPeer) {
         if (p.type == Packet.TYPE_ACK) {
             Outgoing o = outgoing == null ? null : outgoing.remove(p.msgId);
+            if (o != null) forgetOutgoing(p.msgId);
             if (o != null && listener != null) listener.onAcked(this, o.packet.msgId);
             return;
         }
@@ -249,11 +317,12 @@ public final class MeshNode implements Transport.Listener {
     // ---- routing ----------------------------------------------------------------------------
 
     private void route(Packet p, int from) {
-        boolean serverOk = server != null && server.available() && server.isReachable(p.dst);
+        boolean serverOk = cfg.deliveryMode != DeliveryMode.OFFLINE_ONLY
+                && server != null && server.available() && server.isReachable(p.dst);
         boolean border = !backbonePeers.isEmpty();
         boolean mayUseServer = serverOk && (p.src == id || border || gateway);
-        // Server first only if configured; otherwise the server helps after an ACK timeout (attempt > 0).
-        if (mayUseServer && (cfg.serverFirst || p.attempt > 0)) {
+        // ONLINE_FIRST goes straight to the server; otherwise the server only helps after an ACK timeout (attempt > 0).
+        if (mayUseServer && (cfg.deliveryMode == DeliveryMode.ONLINE_FIRST || p.attempt > 0)) {
             server.send(p.dst, p.encode());
             return;
         }
@@ -369,12 +438,18 @@ public final class MeshNode implements Transport.Listener {
                     int dstZone = zones.zoneOf(item.packet.dst);
                     if (dstZone != info.zone && (!backbonePeers.isEmpty() || gateway)) {
                         int hop = backboneHop(dstZone);
-                        if (hop >= 0) transport.send(hop, item.packet.encode());
-                        else storeForLater(item.packet, item.expiresAtMs);
+                        if (hop >= 0) {
+                            transport.send(hop, item.packet.encode());
+                            store.done(item);
+                        } else {
+                            store.requeue(item);
+                        }
                     } else {
                         route(item.packet, LOCAL); // role changed: normal routing decides
+                        store.done(item);
                     }
                 }
+                if (store.size() > 0) scheduleRetry();
             }
         });
     }

@@ -49,9 +49,6 @@ public final class MeshConfig {
      * False = ring with shortcut links, forwarded greedily by gateways.
      */
     public boolean fullMesh = false;
-    /**
-     * false (default): the mesh is the main path, the server only helps: when the mesh has no route
-     * and after an ACK timeout. true: an online sender goes straight through the server.
-     */
-    public boolean serverFirst = false;
+    /** Who carries what: the mesh, the server, or both. See {@link DeliveryMode}. */
+    public DeliveryMode deliveryMode = DeliveryMode.OFFLINE_FIRST;
 }

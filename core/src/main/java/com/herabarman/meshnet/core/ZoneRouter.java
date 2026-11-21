@@ -18,6 +18,16 @@ public final class ZoneRouter {
         int zoneOf(int nodeId);
     }
 
+    /** Simplest zone assignment: ids 0..zoneSize-1 are zone 0, the next zoneSize ids zone 1, and so on. */
+    public static ZoneMap blockZones(final int zoneSize) {
+        return new ZoneMap() {
+            @Override
+            public int zoneOf(int nodeId) {
+                return nodeId / zoneSize;
+            }
+        };
+    }
+
     public static int ringDistance(int a, int b, int zoneCount) {
         int d = Math.abs(a - b);
         return Math.min(d, zoneCount - d);

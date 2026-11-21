@@ -2,6 +2,8 @@ package com.herabarman.meshnet.sim;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.herabarman.meshnet.core.DeliveryMode;
+
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -15,7 +17,7 @@ class RoutingTest {
         c.jitterMs = 0;
         c.seed = 7;
         c.backbone = "chord";    // these tests are about the ring backbone + gateways
-        c.serverFirst = true;    // and about the old server-first behaviour
+        c.mode = DeliveryMode.ONLINE_FIRST;   // and about the server-first behaviour
         return c;
     }
 

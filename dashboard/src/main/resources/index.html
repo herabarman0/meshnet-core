@@ -114,7 +114,14 @@
     </select>
   </div>
   <label class="s"><span>দুই জোনের মধ্যে অফলাইন লিংক</span><b id="vLinks">2</b><input id="links" type="range" min="1" max="4" step="1" value="2"></label>
-  <label class="c"><input id="serverFirst" type="checkbox">সার্ভার-প্রথম (বন্ধ থাকলে মেশই মূল পথ, অনলাইন শুধু সাহায্য করে)</label>
+  <div class="row" style="margin:10px 0">
+    <span class="hint" style="align-self:center">ডেলিভারি মোড</span>
+    <select id="mode">
+      <option value="offline-only">শুধু অফলাইন (সার্ভার কখনো নয়)</option>
+      <option value="offline-first">অফলাইন আগে (অনলাইন সাহায্য করে)</option>
+      <option value="online-first">অনলাইন আগে (সার্ভার-প্রথম)</option>
+    </select>
+  </div>
   <label class="c"><input id="suppress" type="checkbox" checked>ফ্লাড কমানো (sender/counter suppression)</label>
   <label class="c"><input id="routes" type="checkbox" checked>রুট লার্নিং</label>
   <label class="c"><input id="ack" type="checkbox" checked>ACK + ফলব্যাক</label>
@@ -332,7 +339,7 @@ function loadSettings() {
   set("online", s.online, "vOnline"); set("gateways", s.gateways, "vGw");
   set("loss", s.loss, "vLoss"); set("churn", s.churn, "vChurn"); set("traffic", s.traffic, "vTraffic");
   $("suppress").checked = s.suppress; $("routes").checked = s.routes; $("ack").checked = s.ack;
-  $("backbone").value = s.backbone; set("links", s.links, "vLinks"); $("serverFirst").checked = s.serverFirst;
+  $("backbone").value = s.backbone; set("links", s.links, "vLinks"); $("mode").value = s.mode;
   $("showAll").checked = S.showAll; $("speed").value = String(S.speed);
   settingsLoaded = true;
 }
@@ -406,8 +413,8 @@ $("showAll").addEventListener("change", () => act("/api/config?showAll=" + ($("s
 $("speed").addEventListener("change", () => act("/api/config?speed=" + $("speed").value));
 $("apply").addEventListener("click", async () => {
   const q = ["nodes", "zoneSize", "online", "gateways"].map((id) => id + "=" + $(id).value);
-  for (const id of ["suppress", "routes", "ack", "serverFirst"]) q.push(id + "=" + ($(id).checked ? 1 : 0));
-  q.push("backbone=" + $("backbone").value, "links=" + $("links").value);
+  for (const id of ["suppress", "routes", "ack"]) q.push(id + "=" + ($(id).checked ? 1 : 0));
+  q.push("backbone=" + $("backbone").value, "links=" + $("links").value, "mode=" + $("mode").value);
   q.push("reset=1");
   selA = -1; selB = -1; lastSeq = 0; anims = [];
   await act("/api/config?" + q.join("&"));

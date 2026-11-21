@@ -2,6 +2,8 @@ package com.herabarman.meshnet.sim;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.herabarman.meshnet.core.DeliveryMode;
+
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -117,14 +119,27 @@ class FullMeshTest {
     }
 
     @Test
-    void serverFirstModeStillAvailable() {
+    void onlineFirstModeStillAvailable() {
         SimConfig c = cfg();
         c.onlineRatio = 1.0;
-        c.serverFirst = true;
+        c.mode = DeliveryMode.ONLINE_FIRST;
         SimNetwork net = new SimNetwork(c);
         net.sendMessage(plainNode(net, 0, c.zoneSize), plainNode(net, 6, c.zoneSize), PAYLOAD, 1);
         net.clock.runFor(5_000);
         assertEquals(1, net.metrics.viaServer);
+    }
+
+    @Test
+    void offlineOnlyNeverTouchesTheServerEvenWhenTheMeshIsDown() {
+        SimConfig c = cfg();
+        c.onlineRatio = 1.0;
+        c.mode = DeliveryMode.OFFLINE_ONLY;
+        SimNetwork net = new SimNetwork(c);
+        net.cfg.lossRate = 1.0;
+        net.sendMessage(plainNode(net, 0, c.zoneSize), plainNode(net, 6, c.zoneSize), PAYLOAD, 1);
+        net.clock.runFor(60_000);
+        assertEquals(0, net.metrics.delivered);
+        assertEquals(0, net.metrics.viaServer);
     }
 
     @Test
